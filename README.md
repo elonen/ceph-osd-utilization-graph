@@ -15,5 +15,8 @@ python3 -m venv _venv && _venv/bin/pip install -r requirements.txt
 ceph osd df -f json | _venv/bin/python osd-usage-histogram.py > output.svg
 ```
 
+In addition to the visualizer, this also contains a balance planner that suggest which OSDs to swap to improve the overall balance.
+Run `suggest-swaps.py` to generate a plan.
+
 Released under the MIT License
-(c) 2021 by Jarno Elonen
+(c) 2021-2024 by Jarno Elonen
