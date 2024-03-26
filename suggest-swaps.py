@@ -33,7 +33,7 @@ def get_ceph_osd_metadata() -> List[CephOsd]:
         result = subprocess.run(['ceph', 'osd', 'metadata'], capture_output=True, text=True, check=True)
         osd_metadata = json.loads(result.stdout)
 
-        osd_objects = []        
+        osd_objects = []
         for osd in osd_metadata:
             osd_obj = CephOsd(
                 id=int(osd.get('id', 0)),
@@ -64,6 +64,17 @@ def group_osds_by_host_and_type(osds: List[CephOsd]) -> List[CephHost]:
         hosts[osd.hostname].setdefault(osd.bluestore_bdev_type, []).append(osd)
     ceph_hosts = [CephHost(hostname=host, osd_by_type=types) for host, types in hosts.items()]    
     return ceph_hosts
+
+
+class VisitorCache:
+    def __init__(self):
+        self.visited = set()
+    
+    def check(self, sig: Tuple) -> bool:
+        """Return if a signature has been visited before, and mark it as visited."""
+        res = sig in self.visited
+        self.visited.add(sig)
+        return res
 
 
 def calculate_spread_by_type(hosts: List[CephHost]) -> Dict[str, float]:
@@ -103,12 +114,18 @@ def find_best_swap(hosts: List[CephHost]) -> Optional[Tuple[CephOsd, CephOsd]]:
             # Get all OSDs from both hosts
             host_a_osds = list(chain(*host_a.osd_by_type.values()))
             host_b_osds = list(chain(*host_b.osd_by_type.values()))
+            host_a_visited_cache, host_b_visited_cache = VisitorCache(), VisitorCache()
 
             for osd_a in host_a_osds:
-                for osd_b in host_b_osds:
+                # Only check each size-type combination once, per host
+                if host_a_visited_cache.check((osd_a.bluestore_bdev_size, osd_a.bluestore_bdev_type)):
+                    continue
 
+                for osd_b in host_b_osds:
                     # Skip trivially non-beneficial swaps
                     if (osd_a.bluestore_bdev_size == osd_b.bluestore_bdev_size) and (osd_a.bluestore_bdev_type == osd_b.bluestore_bdev_type):
+                        continue
+                    if host_b_visited_cache.check((osd_b.bluestore_bdev_size, osd_b.bluestore_bdev_type)):
                         continue
 
                     # Swap sizes hypothetically
@@ -137,9 +154,9 @@ def print_state(hosts: List[CephHost]):
     for host in sorted(hosts, key=lambda h: h.hostname):
         print(f"{host.hostname}")
         for osd_type, osds in sorted(host.osd_by_type.items()):
-            osd_strs = [f"osd.{osd.id} {osd.bluestore_bdev_size//(10**9)}GB" for osd in osds]
+            osd_strs = [f"<osd.{osd.id} {osd.bluestore_bdev_size//(10**9):,} GB>" for osd in osds]
             total_size = sum(osd.bluestore_bdev_size for osd in osds) // (10**9)
-            print(f"  {osd_type.upper()} (total {total_size} GB): {', '.join(osd_strs)}")
+            print(f"  {osd_type.upper()} (total {total_size:,} GB): {', '.join(osd_strs)}")
 
 
 def optimize(hosts: List[CephHost]):
@@ -157,9 +174,9 @@ def optimize(hosts: List[CephHost]):
     
         osd_a, osd_b = best_swap
         print(f"Swap #{i}:")
-        print(f"  osd.{osd_a.id} @ {osd_a.hostname}, device: {osd_a.device_ids}, ({osd_a.bluestore_bdev_size//(10**9)}GB {osd_a.bluestore_bdev_type})")
+        print(f"  osd.{osd_a.id} @ {osd_a.hostname}, device: {osd_a.device_ids}, ({osd_a.bluestore_bdev_size//(10**9):,} GB {osd_a.bluestore_bdev_type.upper()})")
         print("  <->")
-        print(f"  osd.{osd_b.id} @ {osd_b.hostname}, device: {osd_b.device_ids}, ({osd_b.bluestore_bdev_size//(10**9)}GB {osd_b.bluestore_bdev_type})")
+        print(f"  osd.{osd_b.id} @ {osd_b.hostname}, device: {osd_b.device_ids}, ({osd_b.bluestore_bdev_size//(10**9):,} GB {osd_b.bluestore_bdev_type.upper()})")
         print("")
 
         swap_osd(hosts, best_swap[0], best_swap[1])
